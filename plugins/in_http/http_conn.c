@@ -24,7 +24,8 @@
 #include "http.h"
 #include "http_conn.h"
 #include "http_prot.h"
-
+extern struct mk_plugin mk_plugin_liana;
+ 
 static int http_conn_event(void *data)
 {
     int status;
@@ -79,13 +80,46 @@ static int http_conn_event(void *data)
                       bytes, conn->buf_len, conn->buf_len + bytes);
         conn->buf_len += bytes;
         conn->buf_data[conn->buf_len] = '\0';
+{
+        struct mk_http_request hacky_request;
 
         session = &conn->session;
-        request = mk_list_entry_first(&session->request_list,
-                                 struct mk_http_request, _head);
+        session->socket = conn->fd;
 
+        // request = mk_list_entry_first(&session->request_list,
+        //                          struct mk_http_request, _head);
+
+        request = &hacky_request;
+        memset(request, 0, sizeof(struct mk_http_request));
+
+        mk_clock_sequential_init(session->server);
+
+        mk_plugin_api_init(session->server);
+        mk_plugin_load_all(session->server);
+        
+        session->server->network = mk_plugin_lookup("liana", session->server)->network;
+
+        session->channel = mk_channel_new(MK_CHANNEL_SOCKET, conn->fd);
+        session->channel->io = session->server->network;
+
+        mk_cache_worker_init();
+
+        mk_http_request_init(session,
+                              request,
+                              session->server);
+
+        request->in_headers.type        = MK_STREAM_IOV;
+        request->in_headers.dynamic     = MK_FALSE;
+        request->in_headers.cb_consumed = NULL;
+        request->in_headers.cb_finished = NULL;
+        request->in_headers.stream      = &request->stream;
+        mk_list_add(&request->in_headers._head, &request->stream.inputs);
+
+        request->session = session;
         status = mk_http_parser(request, &session->parser,
-                                conn->buf_data, conn->buf_len, NULL);
+                                conn->buf_data, conn->buf_len, session->server);
+
+}
 
         if (status == MK_HTTP_PARSER_OK) {
             /* Do more logic parsing and checks for this request */
