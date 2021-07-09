@@ -548,15 +548,18 @@ static int flb_net_getaddrinfo_event_handler(void *arg)
 
     context = (struct flb_dns_lookup_context *) arg;
 
-    if (0 == context->finished) {
-        ares_process_fd(context->ares_channel,
-                        context->response_event.fd,
-                        context->response_event.fd);
-    }
+    ares_process_fd(context->ares_channel,
+                    context->response_event.fd,
+                    context->response_event.fd);
 
-    // if (1 == context->finished) {
-    //     flb_coro_resume(context->coroutine);
-    // }
+    /* We count on having this opportunity to remove the socket from the event loop
+     * even if the event that triggered this callback was a timeout or premature
+     * close but we will need to figure this out if there is a chance for c-ares
+     * to open multiple simultaneous connections as suspected.
+     */
+    if (context->finished == 1) {
+        mk_event_del(context->event_loop, &context->response_event);
+    }
 
     return 0;
 }
@@ -570,6 +573,14 @@ static int flb_net_ares_sock_create_callback(ares_socket_t socket_fd,
     int event_mask;
 
     context = (struct flb_dns_lookup_context *) userdata;
+
+    if (context->ares_socket_created == 1) {
+        /* This context already had a connection established and the code is not ready
+         * to handle multiple connections so we abort the process.
+         */
+
+        return -1;
+    }
 
     context->ares_socket_created = 1;
 
@@ -605,8 +616,9 @@ static int flb_net_ares_sock_create_callback(ares_socket_t socket_fd,
     return ARES_SUCCESS;
 }
 
-struct flb_dns_lookup_context *flb_net_dns_lookup_context_create(struct mk_event_loop *evl,
-                                                                 struct flb_coro *coroutine)
+static struct flb_dns_lookup_context *flb_net_dns_lookup_context_create(
+                                            struct mk_event_loop *evl,
+                                            struct flb_coro *coroutine)
 {
     int result;
     int optmask = 0;
@@ -646,13 +658,33 @@ struct flb_dns_lookup_context *flb_net_dns_lookup_context_create(struct mk_event
     return context;
 }
 
-void flb_net_dns_lookup_context_destroy(struct flb_dns_lookup_context *context)
+static void flb_net_dns_lookup_context_destroy(struct flb_dns_lookup_context *context)
 {
-    mk_event_del(context->event_loop, &context->response_event);
+    /* We had to move the mk_event_del call to the immediate event loop callback
+     * because for some reason calling it here would break the system.
+     * I still don't understand why but that was the only way to fix it.
+     */
+
     ares_destroy(context->ares_channel);
     flb_free(context);
 }
 
+void flb_net_dns_lookup_context_cleanup(struct mk_list *cleanup_queue)
+{
+    struct flb_dns_lookup_context *lookup_context;
+    struct mk_list *head; 
+    struct mk_list *tmp;
+
+    mk_list_foreach_safe(head, tmp, cleanup_queue) {
+        lookup_context = mk_list_entry(head, struct flb_dns_lookup_context, _head);
+
+        mk_list_del(&lookup_context->_head);
+
+        flb_coro_resume(lookup_context->coroutine);
+
+        flb_net_dns_lookup_context_destroy(lookup_context);
+    }
+}
 
 int flb_net_getaddrinfo(const char *node, const char *service, struct addrinfo *hints,
                         struct addrinfo **res)

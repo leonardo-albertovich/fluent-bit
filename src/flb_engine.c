@@ -731,22 +731,7 @@ int flb_engine_start(struct flb_config *config)
         if (config->is_running == FLB_TRUE) {
             flb_sched_timer_cleanup(config->sched);
             flb_upstream_conn_pending_destroy_list(&config->upstreams);
-
-            {
-                struct mk_list *head; 
-                struct mk_list *tmp;
-                struct flb_dns_lookup_context *lookup_context;
-
-                mk_list_foreach_safe(head, tmp, &lookup_context_cleanup_queue) {
-                    lookup_context = mk_list_entry(head, struct flb_dns_lookup_context, _head);
-
-                    mk_list_del(&lookup_context->_head);
-
-                    flb_coro_resume(lookup_context->coroutine);
-
-                    flb_net_dns_lookup_context_destroy(lookup_context);
-                }
-            }
+            flb_net_dns_lookup_context_cleanup(&lookup_context_cleanup_queue);
 
             /*
             * depend on main thread to clean up expired message

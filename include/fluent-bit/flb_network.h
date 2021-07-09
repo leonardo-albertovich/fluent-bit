@@ -88,7 +88,7 @@ void flb_net_setup_init(struct flb_net_setup *net);
 int flb_net_host_set(const char *plugin_name, struct flb_net_host *host, const char *address);
 
 /* DNS handling */
-void flb_net_dns_lookup_context_destroy(struct flb_dns_lookup_context *context);
+void flb_net_dns_lookup_context_cleanup(struct mk_list *cleanup_queue);
 
 /* TCP options */
 int flb_net_socket_reset(flb_sockfd_t fd);
