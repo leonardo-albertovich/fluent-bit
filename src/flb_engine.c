@@ -35,6 +35,7 @@
 #include <fluent-bit/flb_config.h>
 #include <fluent-bit/flb_engine.h>
 #include <fluent-bit/flb_engine_dispatch.h>
+#include <fluent-bit/flb_network.h>
 #include <fluent-bit/flb_task.h>
 #include <fluent-bit/flb_router.h>
 #include <fluent-bit/flb_http_server.h>
@@ -469,6 +470,7 @@ int flb_engine_start(struct flb_config *config)
     struct mk_event *event;
     struct mk_event_loop *evl;
     struct flb_sched *sched;
+    struct mk_list lookup_context_cleanup_queue;
 
     /* Initialize the networking layer */
     flb_net_init();
@@ -629,6 +631,8 @@ int flb_engine_start(struct flb_config *config)
         return -1;
     }
 
+    mk_list_init(&lookup_context_cleanup_queue);
+
     /* Signal that we have started */
     flb_engine_started(config);
 
@@ -687,6 +691,18 @@ int flb_engine_start(struct flb_config *config)
             else if (event->type == FLB_ENGINE_EV_CUSTOM) {
                 event->handler(event);
             }
+            else if (event->type == FLB_ENGINE_EV_DNS) {
+                struct flb_dns_lookup_context *lookup_context;
+                lookup_context = (struct flb_dns_lookup_context *) event;
+
+                if (0 == lookup_context->finished) {
+                    event->handler(event);
+
+                    if (1 == lookup_context->finished) {
+                        mk_list_add(&lookup_context->_head, &lookup_context_cleanup_queue);
+                    }
+                }
+            }
             else if (event->type == FLB_ENGINE_EV_THREAD) {
                 struct flb_upstream_conn *u_conn;
                 struct flb_coro *co;
@@ -715,6 +731,22 @@ int flb_engine_start(struct flb_config *config)
         if (config->is_running == FLB_TRUE) {
             flb_sched_timer_cleanup(config->sched);
             flb_upstream_conn_pending_destroy_list(&config->upstreams);
+
+            {
+                struct mk_list *head; 
+                struct mk_list *tmp;
+                struct flb_dns_lookup_context *lookup_context;
+
+                mk_list_foreach_safe(head, tmp, &lookup_context_cleanup_queue) {
+                    lookup_context = mk_list_entry(head, struct flb_dns_lookup_context, _head);
+
+                    flb_coro_resume(lookup_context->coroutine);
+
+                    flb_net_dns_lookup_context_destroy(lookup_context);
+
+                    mk_list_del(&lookup_context->_head);
+                }
+            }
 
             /*
             * depend on main thread to clean up expired message

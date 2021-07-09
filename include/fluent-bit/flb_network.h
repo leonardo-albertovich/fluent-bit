@@ -68,12 +68,13 @@ struct flb_dns_lookup_context {
     struct mk_event response_event;                  /* c-ares socket event */
     int ares_socket_created;
     void *ares_channel;
-    int result_code;
+    int *result_code;
     int finished;
     struct mk_event_loop *event_loop;
     struct flb_coro *coroutine;
-    struct addrinfo *result;
+    struct addrinfo **result;
     /* result is a synthetized result, don't call freeaddrinfo on it */
+    struct mk_list _head;
 };
 
 #ifndef TCP_FASTOPEN
@@ -85,6 +86,9 @@ void flb_net_init();
 /* Generic functions */
 void flb_net_setup_init(struct flb_net_setup *net);
 int flb_net_host_set(const char *plugin_name, struct flb_net_host *host, const char *address);
+
+/* DNS handling */
+void flb_net_dns_lookup_context_destroy(struct flb_dns_lookup_context *context);
 
 /* TCP options */
 int flb_net_socket_reset(flb_sockfd_t fd);
