@@ -740,11 +740,11 @@ int flb_engine_start(struct flb_config *config)
                 mk_list_foreach_safe(head, tmp, &lookup_context_cleanup_queue) {
                     lookup_context = mk_list_entry(head, struct flb_dns_lookup_context, _head);
 
+                    mk_list_del(&lookup_context->_head);
+
                     flb_coro_resume(lookup_context->coroutine);
 
                     flb_net_dns_lookup_context_destroy(lookup_context);
-
-                    mk_list_del(&lookup_context->_head);
                 }
             }
 
