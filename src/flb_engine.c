@@ -506,6 +506,22 @@ int flb_engine_start(struct flb_config *config)
     struct flb_sched *sched;
     struct flb_net_dns dns_ctx;
 
+    /* We want to process the global storage limit now so we can leave it at zero if
+     * we want it to be automatically set when initializing the output plugins.
+     */
+    if (config->storage_global_space_limit_str != NULL) {
+        if (strcasecmp(config->storage_global_space_limit_str, "automatic") == 0 ||
+            strcasecmp(config->storage_global_space_limit_str, "auto") == 0) {
+            config->storage_global_space_limit = 0;
+        }
+        else if (strcasecmp(config->storage_global_space_limit_str, "unlimited") == 0) {
+            config->storage_global_space_limit = SIZE_MAX;
+        }
+        else {
+            config->storage_global_space_limit = flb_utils_size_to_bytes(config->storage_global_space_limit_str);
+        }
+    }
+
     /* Initialize the networking layer */
     flb_net_lib_init();
 
@@ -664,19 +680,6 @@ int flb_engine_start(struct flb_config *config)
     }
 #endif
 
-    if (config->storage_global_space_limit_str != NULL) {
-        if (strcasecmp(config->storage_global_space_limit_str, "automatic") == 0 ||
-            strcasecmp(config->storage_global_space_limit_str, "auto") == 0) {
-            /* Calculate the limit adding the limits of all the output plugins */
-        }
-        else if (strcasecmp(config->storage_global_space_limit_str, "unlimited") == 0) {
-            config->storage_global_space_limit = SIZE_MAX;
-        }
-        else {
-            config->storage_global_space_limit = flb_utils_size_to_bytes(config->storage_global_space_limit_str);
-        }
-    }
-
     if (config->storage_global_space_limit != SIZE_MAX) {
         char human_readable_space_limit_buffer[16];
 
@@ -700,6 +703,10 @@ int flb_engine_start(struct flb_config *config)
         flb_error("[engine] could not schedule permanent callback");
         return -1;
     }
+
+
+sleep(5);
+exit(0);
 
     /* Signal that we have started */
     flb_engine_started(config);

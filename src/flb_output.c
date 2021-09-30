@@ -818,6 +818,19 @@ int flb_output_init_all(struct flb_config *config)
     struct mk_list *config_map;
     struct flb_output_instance *ins;
     struct flb_output_plugin *p;
+    int auto_tune_storage_global_space_limit;
+    size_t space_limited_instance_count;
+    size_t instance_count;
+
+    if (config->storage_global_space_limit == 0) {
+        auto_tune_storage_global_space_limit = FLB_TRUE;
+    }
+    else {
+        auto_tune_storage_global_space_limit = FLB_FALSE;
+    }
+
+    space_limited_instance_count = 0;
+    instance_count = 0;
 
     /* Retrieve the plugin reference */
     mk_list_foreach_safe(head, tmp, &config->outputs) {
@@ -1047,6 +1060,26 @@ int flb_output_init_all(struct flb_config *config)
             flb_error("[output] could not start thread pool for '%s' plugin",
                       flb_output_name(ins));
             return -1;
+        }
+
+        if (auto_tune_storage_global_space_limit) {
+            instance_count++;
+
+            if (ins->total_limit_size != (size_t) -1) {
+                printf("ins->total_limit_size = %zu\n", ins->total_limit_size);
+                space_limited_instance_count++;
+                config->storage_global_space_limit += ins->total_limit_size;
+            }
+        }
+    }
+
+    if (auto_tune_storage_global_space_limit) {
+        if (instance_count != space_limited_instance_count) {
+            config->storage_global_space_limit = SIZE_MAX;
+
+            flb_error("[output] %zu out of %zu output plugins define a storage limit " \
+                      "because of that, an automatic global storage limit cannot be " \
+                      "inferred", space_limited_instance_count, instance_count);
         }
     }
 
