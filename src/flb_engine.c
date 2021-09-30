@@ -704,10 +704,6 @@ int flb_engine_start(struct flb_config *config)
         return -1;
     }
 
-
-sleep(5);
-exit(0);
-
     /* Signal that we have started */
     flb_engine_started(config);
 
