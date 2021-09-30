@@ -180,6 +180,9 @@ static int sb_prepare_environment(struct flb_sb *ctx)
         stream = mk_list_entry(head, struct cio_stream, _head);
         mk_list_foreach(c_head, &stream->chunks) {
             chunk = mk_list_entry(c_head, struct cio_chunk, _head);
+
+            ctx->ins->config->storage_global_space_used += cio_chunk_get_real_size(chunk);
+
             ret = sb_append_chunk(chunk, stream, ctx);
             if (ret == -1) {
                 flb_error("[storage_backlog] could not enqueue %s/%s",

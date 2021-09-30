@@ -131,6 +131,10 @@ struct flb_service_config service_configs[] = {
      FLB_CONF_TYPE_INT,
      offsetof(struct flb_config, storage_max_chunks_up)},
 
+    {FLB_CONF_STORAGE_GLOBAL_LIMIT,
+     FLB_CONF_TYPE_STR,
+     offsetof(struct flb_config, storage_global_space_limit_str)},
+
     /* Coroutines */
     {FLB_CONF_STR_CORO_STACK_SIZE,
      FLB_CONF_TYPE_INT,

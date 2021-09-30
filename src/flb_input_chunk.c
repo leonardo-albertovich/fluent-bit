@@ -669,6 +669,8 @@ int flb_input_chunk_destroy(struct flb_input_chunk *ic, int del)
         }
     }
 
+    o_ins->config->storage_global_space_used -= cio_chunk_get_real_size(ic->chunk);
+
     cio_chunk_close(ic->chunk, del);
     mk_list_del(&ic->_head);
     flb_free(ic);
@@ -681,7 +683,7 @@ static struct flb_input_chunk *input_chunk_get(struct flb_input_instance *in,
                                                const char *tag, int tag_len,
                                                size_t chunk_size, int *set_down)
 {
-    int id;
+    int id = -1;
     int ret;
     int new_chunk = FLB_FALSE;
     size_t out_size;
@@ -941,6 +943,14 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     size_t pre_size;
     struct flb_input_chunk *ic;
     struct flb_storage_input *si;
+    size_t original_chunk_size;
+    size_t modified_chunk_size;
+
+    if (in->config->storage_global_space_limit != SIZE_MAX &&
+        in->config->storage_global_space_limit <= in->config->storage_global_space_used) {
+        flb_error("[input chunk] total space limit exceeded, cannot append records");
+        return -1;
+    }
 
     /* Check if the input plugin has been paused */
     if (flb_input_buf_paused(in) == FLB_TRUE) {
@@ -983,6 +993,8 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     if (flb_input_chunk_get_size(ic) == 0) {
         new_chunk = FLB_TRUE;
     }
+
+    original_chunk_size = cio_chunk_get_real_size(ic->chunk);
 
     /* We got the chunk, validate if is 'up' or 'down' */
     ret = flb_input_chunk_is_up(ic);
@@ -1149,6 +1161,18 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     }
 
     flb_input_chunk_protect(in);
+
+    modified_chunk_size = cio_chunk_get_real_size(ic->chunk);
+
+    /* I don't expect threading issues here and even though I feel like chunk file size
+     * shouldn't go down I'm not sure of it and thus I'd rather not subtract these until
+     * I'm sure enough.
+     */
+    if (modified_chunk_size != original_chunk_size) {
+        in->config->storage_global_space_used -= original_chunk_size;
+        in->config->storage_global_space_used += modified_chunk_size;
+    }
+
     return 0;
 }
 

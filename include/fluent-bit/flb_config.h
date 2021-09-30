@@ -198,6 +198,10 @@ struct flb_config {
     char *storage_bl_mem_limit;     /* storage backlog memory limit */
     struct flb_storage_metrics *storage_metrics_ctx; /* storage metrics context */
 
+    flb_sds_t storage_global_space_limit_str; /* global storage limit */
+    size_t    storage_global_space_limit; /* global storage limit */
+    size_t    storage_global_space_used; /* global storage counter */
+
     /* Embedded SQL Database support (SQLite3) */
 #ifdef FLB_HAVE_SQLDB
     struct mk_list sqldb_list;
@@ -298,6 +302,7 @@ enum conf_type {
 #define FLB_CONF_STORAGE_CHECKSUM      "storage.checksum"
 #define FLB_CONF_STORAGE_BL_MEM_LIMIT  "storage.backlog.mem_limit"
 #define FLB_CONF_STORAGE_MAX_CHUNKS_UP "storage.max_chunks_up"
+#define FLB_CONF_STORAGE_GLOBAL_LIMIT  "storage.global_limit"
 
 /* Coroutines */
 #define FLB_CONF_STR_CORO_STACK_SIZE "Coro_Stack_Size"

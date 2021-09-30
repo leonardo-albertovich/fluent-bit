@@ -664,6 +664,31 @@ int flb_engine_start(struct flb_config *config)
     }
 #endif
 
+    if (config->storage_global_space_limit_str != NULL) {
+        if (strcasecmp(config->storage_global_space_limit_str, "automatic") == 0 ||
+            strcasecmp(config->storage_global_space_limit_str, "auto") == 0) {
+            /* Calculate the limit adding the limits of all the output plugins */
+        }
+        else if (strcasecmp(config->storage_global_space_limit_str, "unlimited") == 0) {
+            config->storage_global_space_limit = SIZE_MAX;
+        }
+        else {
+            config->storage_global_space_limit = flb_utils_size_to_bytes(config->storage_global_space_limit_str);
+        }
+    }
+
+    if (config->storage_global_space_limit != SIZE_MAX) {
+        char human_readable_space_limit_buffer[16];
+
+        human_readable_space_limit_buffer[0] = 0;
+
+        flb_utils_bytes_to_human_readable_size(config->storage_global_space_limit,
+                                               human_readable_space_limit_buffer,
+                                               sizeof(human_readable_space_limit_buffer) - 1);
+
+        flb_info("[engine] applying a global storage usage limit of %s", human_readable_space_limit_buffer);
+    }
+
     /*
      * Sched a permanent callback triggered every 1.5 second to let other
      * Fluent Bit components run tasks at that interval.
