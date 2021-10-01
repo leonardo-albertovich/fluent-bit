@@ -995,9 +995,14 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     /* newly created chunk */
     if (flb_input_chunk_get_size(ic) == 0) {
         new_chunk = FLB_TRUE;
+
+        original_chunk_size = 0;
+    }
+    else
+    {
+        original_chunk_size = cio_chunk_get_real_size(ic->chunk);
     }
 
-    original_chunk_size = cio_chunk_get_real_size(ic->chunk);
 
     /* We got the chunk, validate if is 'up' or 'down' */
     ret = flb_input_chunk_is_up(ic);

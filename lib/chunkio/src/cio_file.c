@@ -1081,6 +1081,8 @@ int cio_file_fs_size_change(struct cio_file *cf, size_t new_size)
         ret = ftruncate(cf->fd, new_size);
     }
 
+    cf->fs_size = new_size;
+
     return ret;
 }
 
