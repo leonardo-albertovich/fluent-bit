@@ -29,6 +29,7 @@
 #include <fluent-bit/flb_routes_mask.h>
 #include <fluent-bit/flb_metrics.h>
 #include <fluent-bit/stream_processor/flb_sp.h>
+#include <chunkio/chunkio.h>
 
 static void generate_chunk_name(struct flb_input_instance *in,
                                 char *out_buf, int buf_size)
@@ -669,7 +670,9 @@ int flb_input_chunk_destroy(struct flb_input_chunk *ic, int del)
         }
     }
 
-    o_ins->config->storage_global_space_used -= cio_chunk_get_real_size(ic->chunk);
+    if (cio_chunk_is_file(ic->chunk) && del) {
+        o_ins->config->storage_global_space_used -= cio_chunk_get_real_size(ic->chunk);
+    }
 
     cio_chunk_close(ic->chunk, del);
     mk_list_del(&ic->_head);
@@ -946,16 +949,16 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     size_t original_chunk_size;
     size_t modified_chunk_size;
 
-    if (in->config->storage_global_space_limit != SIZE_MAX &&
-        in->config->storage_global_space_limit <= in->config->storage_global_space_used) {
-        flb_error("[input chunk] total space limit exceeded, cannot append records");
-        return -1;
-    }
-
     /* Check if the input plugin has been paused */
     if (flb_input_buf_paused(in) == FLB_TRUE) {
         flb_debug("[input chunk] %s is paused, cannot append records",
                   in->name);
+        return -1;
+    }
+
+    if (in->config->storage_global_space_limit != SIZE_MAX &&
+        in->config->storage_global_space_limit <= in->config->storage_global_space_used) {
+        flb_error("[input chunk] total space limit exceeded, cannot append records");
         return -1;
     }
 
@@ -1164,13 +1167,15 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
 
     modified_chunk_size = cio_chunk_get_real_size(ic->chunk);
 
-    /* I don't expect threading issues here and even though I feel like chunk file size
-     * shouldn't go down I'm not sure of it and thus I'd rather not subtract these until
-     * I'm sure enough.
-     */
-    if (modified_chunk_size != original_chunk_size) {
-        in->config->storage_global_space_used -= original_chunk_size;
-        in->config->storage_global_space_used += modified_chunk_size;
+    if (cio_chunk_is_file(ic->chunk)) {
+        /* I don't expect threading issues here and even though I feel like chunk file size
+         * shouldn't go down I'm not sure of it and thus I'd rather not subtract these until
+         * I'm sure enough.
+         */
+        if (modified_chunk_size != original_chunk_size) {
+            in->config->storage_global_space_used -= original_chunk_size;
+            in->config->storage_global_space_used += modified_chunk_size;
+        }
     }
 
     return 0;

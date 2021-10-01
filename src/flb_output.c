@@ -1077,9 +1077,9 @@ int flb_output_init_all(struct flb_config *config)
         if (instance_count != space_limited_instance_count) {
             config->storage_global_space_limit = SIZE_MAX;
 
-            flb_error("[output] %zu out of %zu output plugins define a storage limit " \
-                      "because of that, an automatic global storage limit cannot be " \
-                      "inferred", space_limited_instance_count, instance_count);
+            flb_info("[output] %zu out of %zu output plugins define a storage limit " \
+                     "because of that, an automatic global storage limit cannot be " \
+                     "inferred", space_limited_instance_count, instance_count);
         }
     }
 

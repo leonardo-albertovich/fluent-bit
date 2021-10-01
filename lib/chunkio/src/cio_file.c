@@ -510,7 +510,7 @@ static inline int open_and_up(struct cio_ctx *ctx)
 /*
  * Fetch the file size regardless of if we opened this file or not.
  */
-size_t cio_file_size(struct cio_file *cf)
+size_t cio_file_real_size(struct cio_file *cf)
 {
     int ret;
     struct stat st;

@@ -289,7 +289,7 @@ ssize_t cio_chunk_get_real_size(struct cio_chunk *ch)
 
         /* If the file is not open we need to explicitly get its size */
         if (cf->fs_size == 0) {
-            return cio_file_size(cf);
+            return cio_file_real_size(cf);
         }
 
         return cf->fs_size;
