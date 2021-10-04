@@ -84,11 +84,14 @@ size_t flb_input_chunk_set_limits(struct flb_input_instance *in);
 size_t flb_input_chunk_total_size(struct flb_input_instance *in);
 struct flb_input_chunk *flb_input_chunk_map(struct flb_input_instance *in,
                                             void *chunk);
+int flb_input_chunk_attribute_backlog_storage_usage(struct flb_input_instance *in,
+                                                    void *chunk);
 int flb_input_chunk_set_up_down(struct flb_input_chunk *ic);
 int flb_input_chunk_set_up(struct flb_input_chunk *ic);
 int flb_input_chunk_down(struct flb_input_chunk *ic);
 int flb_input_chunk_is_up(struct flb_input_chunk *ic);
 void flb_input_chunk_update_output_instances(struct flb_input_chunk *ic,
-                                             size_t chunk_size);
+                                             ssize_t chunk_size,
+                                             int chunk_location);
 
 #endif

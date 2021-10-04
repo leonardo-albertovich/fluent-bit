@@ -181,6 +181,12 @@ static int sb_prepare_environment(struct flb_sb *ctx)
         mk_list_foreach(c_head, &stream->chunks) {
             chunk = mk_list_entry(c_head, struct cio_chunk, _head);
 
+            if (!cio_chunk_is_up(chunk)) {
+                cio_chunk_up(chunk);
+            }
+
+            flb_input_chunk_attribute_backlog_storage_usage(ctx->ins, chunk);
+
             ctx->ins->config->storage_global_space_used += cio_chunk_get_real_size(chunk);
 
             ret = sb_append_chunk(chunk, stream, ctx);

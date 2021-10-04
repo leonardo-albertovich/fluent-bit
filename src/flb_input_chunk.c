@@ -31,6 +31,10 @@
 #include <fluent-bit/stream_processor/flb_sp.h>
 #include <chunkio/chunkio.h>
 
+
+#define CHUNK_LOCATION_STORAGE 0
+#define CHUNK_LOCATION_BACKLOG 1
+
 static void generate_chunk_name(struct flb_input_instance *in,
                                 char *out_buf, int buf_size)
 {
@@ -164,7 +168,10 @@ int flb_intput_chunk_count_dropped_chunks(struct flb_input_chunk *ic,
     struct mk_list *head;
     struct flb_input_chunk *old_ic;
 
-    bytes_remained = o_ins->total_limit_size - o_ins->fs_chunks_size;
+    bytes_remained = o_ins->total_limit_size -
+                     o_ins->fs_chunks_size -
+                     o_ins->fs_backlog_chunks_size;
+
     mk_list_foreach(head, &ic->in->chunks) {
         old_ic = mk_list_entry(head, struct flb_input_chunk, _head);
 
@@ -235,6 +242,9 @@ int flb_input_chunk_find_space_new_data(struct flb_input_chunk *ic,
              * old chunks for the incoming chunk. We need to adjust the routes_mask
              * of the incoming chunk to not flush to that output instance.
              */
+            printf("o_ins->fs_backlog_chunks_size = %zu\n", o_ins->fs_backlog_chunks_size);
+            printf("o_ins->fs_chunks_size = %zu\n",         o_ins->fs_chunks_size);
+
             flb_error("[input chunk] no enough space in filesystem to buffer "
                       "chunk %s in plugin %s", flb_input_chunk_get_name(ic), o_ins->name);
 
@@ -336,9 +346,12 @@ int flb_input_chunk_has_overlimit_routes(struct flb_input_chunk *ic,
 
         flb_debug("[input chunk] chunk %s required %ld bytes and %ld bytes left "
                   "in plugin %s", flb_input_chunk_get_name(ic), chunk_size,
-                  o_ins->total_limit_size - o_ins->fs_chunks_size, o_ins->name);
+                  o_ins->total_limit_size -
+                  o_ins->fs_backlog_chunks_size -
+                  o_ins->fs_chunks_size,
+                  o_ins->name);
 
-        if (o_ins->fs_chunks_size + chunk_size > o_ins->total_limit_size) {
+        if (o_ins->fs_chunks_size + o_ins->fs_backlog_chunks_size + chunk_size > o_ins->total_limit_size) {
             overlimit |= (1 << o_ins->id);
         }
     }
@@ -492,9 +505,47 @@ struct flb_input_chunk *flb_input_chunk_map(struct flb_input_instance *in,
     }
 
     mk_list_add(&ic->_head, &in->chunks);
-    flb_input_chunk_update_output_instances(ic, bytes);
+    flb_input_chunk_update_output_instances(ic,  bytes, CHUNK_LOCATION_STORAGE);
+    flb_input_chunk_update_output_instances(ic, -bytes, CHUNK_LOCATION_BACKLOG);
 
     return ic;
+}
+
+/* Create an input chunk using a Chunk I/O */
+int flb_input_chunk_attribute_backlog_storage_usage(struct flb_input_instance *in,
+                                                    void *chunk)
+{
+    struct flb_input_chunk dummy_ic;
+    int                    tag_len;
+    const char *           tag_buf;
+    size_t                 bytes;
+    int                    ret;
+
+    dummy_ic.in    = in;
+    dummy_ic.chunk = chunk;
+
+    memset(&dummy_ic.routes_mask, 0, sizeof(dummy_ic.routes_mask));
+
+    bytes = flb_input_chunk_get_real_size(&dummy_ic);
+    if (bytes < 0) {
+        flb_warn("[input chunk] could not retrieve chunk real size");
+        return -1;
+    }
+
+    /* Get the the tag reference (chunk metadata) */
+    ret = flb_input_chunk_get_tag(&dummy_ic, &tag_buf, &tag_len);
+    if (ret == -1) {
+        flb_error("[input chunk] error retrieving tag of input chunk");
+        return -1;
+    }
+
+    flb_routes_mask_set_by_tag(dummy_ic.routes_mask, tag_buf, tag_len, in);
+
+    printf("[%.*s]\n", tag_len, tag_buf);
+
+    flb_input_chunk_update_output_instances(&dummy_ic, bytes, CHUNK_LOCATION_BACKLOG);
+
+    return 0;
 }
 
 struct flb_input_chunk *flb_input_chunk_create(struct flb_input_instance *in,
@@ -668,10 +719,6 @@ int flb_input_chunk_destroy(struct flb_input_chunk *ic, int del)
             flb_hash_del_ptr(ic->in->ht_metric_chunks,
                              tag_buf, tag_len, (void *) ic);
         }
-    }
-
-    if (cio_chunk_is_file(ic->chunk) && del) {
-        o_ins->config->storage_global_space_used -= cio_chunk_get_real_size(ic->chunk);
     }
 
     cio_chunk_close(ic->chunk, del);
@@ -946,19 +993,11 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     size_t pre_size;
     struct flb_input_chunk *ic;
     struct flb_storage_input *si;
-    size_t original_chunk_size;
-    size_t modified_chunk_size;
 
     /* Check if the input plugin has been paused */
     if (flb_input_buf_paused(in) == FLB_TRUE) {
         flb_debug("[input chunk] %s is paused, cannot append records",
                   in->name);
-        return -1;
-    }
-
-    if (in->config->storage_global_space_limit != SIZE_MAX &&
-        in->config->storage_global_space_limit <= in->config->storage_global_space_used) {
-        flb_error("[input chunk] total space limit exceeded, cannot append records");
         return -1;
     }
 
@@ -995,14 +1034,7 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     /* newly created chunk */
     if (flb_input_chunk_get_size(ic) == 0) {
         new_chunk = FLB_TRUE;
-
-        original_chunk_size = 0;
     }
-    else
-    {
-        original_chunk_size = cio_chunk_get_real_size(ic->chunk);
-    }
-
 
     /* We got the chunk, validate if is 'up' or 'down' */
     ret = flb_input_chunk_is_up(ic);
@@ -1090,7 +1122,7 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     }
 
     if (diff != 0) {
-        flb_input_chunk_update_output_instances(ic, diff);
+        flb_input_chunk_update_output_instances(ic, diff, CHUNK_LOCATION_STORAGE);
     }
 
     /* Lock buffers where size > 2MB */
@@ -1169,19 +1201,6 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     }
 
     flb_input_chunk_protect(in);
-
-    modified_chunk_size = cio_chunk_get_real_size(ic->chunk);
-
-    if (cio_chunk_is_file(ic->chunk)) {
-        /* I don't expect threading issues here and even though I feel like chunk file size
-         * shouldn't go down I'm not sure of it and thus I'd rather not subtract these until
-         * I'm sure enough.
-         */
-        if (modified_chunk_size != original_chunk_size) {
-            in->config->storage_global_space_used -= original_chunk_size;
-            in->config->storage_global_space_used += modified_chunk_size;
-        }
-    }
 
     return 0;
 }
@@ -1267,7 +1286,8 @@ int flb_input_chunk_get_tag(struct flb_input_chunk *ic,
  * the total number of bytes in use after ingesting the new data.
  */
 void flb_input_chunk_update_output_instances(struct flb_input_chunk *ic,
-                                             size_t chunk_size)
+                                             ssize_t chunk_size,
+                                             int chunk_location)
 {
     struct mk_list *head;
     struct flb_output_instance *o_ins;
@@ -1284,7 +1304,14 @@ void flb_input_chunk_update_output_instances(struct flb_input_chunk *ic,
              * if there is match on any index of 1's in the binary, it indicates
              * that the input chunk will flush to this output instance
              */
-            o_ins->fs_chunks_size += chunk_size;
+            if(CHUNK_LOCATION_BACKLOG == chunk_location)
+            {
+                o_ins->fs_backlog_chunks_size += chunk_size;
+            }
+            else
+            {
+                o_ins->fs_chunks_size += chunk_size;
+            }
             flb_debug("[input chunk] chunk %s update plugin %s fs_chunks_size by %ld bytes, "
                       "the current fs_chunks_size is %ld bytes", flb_input_chunk_get_name(ic),
                       o_ins->name, chunk_size, o_ins->fs_chunks_size);
