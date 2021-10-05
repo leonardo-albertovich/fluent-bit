@@ -265,6 +265,28 @@ static inline int prop_key_check(const char *key, const char *kv, int k_len)
     return -1;
 }
 
+struct flb_input_instance *flb_get_input_by_name(const char *name,
+                                                 struct flb_config *config)
+{
+    struct mk_list            *head;
+    struct flb_input_instance *ins;
+
+    mk_list_foreach(head, &config->inputs) {
+        ins = mk_list_entry(head, struct flb_input_instance, _head);
+        if (strcmp(ins->name, name) == 0) {
+            return ins;
+        }
+
+        if (ins->alias) {
+            if (strcmp(ins->alias, name) == 0) {
+                return ins;
+            }
+        }
+    }
+
+    return NULL;
+}
+
 int flb_input_name_exists(const char *name, struct flb_config *config)
 {
     struct mk_list *head;

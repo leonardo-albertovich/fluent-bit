@@ -570,6 +570,8 @@ void *flb_input_flush(struct flb_input_instance *ins, size_t *size);
 int flb_input_pause_all(struct flb_config *config);
 const char *flb_input_name(struct flb_input_instance *ins);
 int flb_input_name_exists(const char *name, struct flb_config *config);
+struct flb_input_instance *flb_get_input_by_name(const char *name,
+                                                 struct flb_config *config);
 
 void flb_input_net_default_listener(const char *listen, int port,
                                     struct flb_input_instance *ins);
