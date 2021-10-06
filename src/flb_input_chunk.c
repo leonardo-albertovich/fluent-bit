@@ -121,6 +121,9 @@ static int flb_input_chunk_release_space(
 
             output_plugin->fs_chunks_size -= chunk_size;
 
+            chunk_destroy_flag = flb_routes_mask_is_empty(
+                                                old_input_chunk->routes_mask);
+
             chunk_released = FLB_TRUE;
         }
         else if (release_scope == FLB_INPUT_CHUNK_RELEASE_SCOPE_GLOBAL) {
@@ -319,7 +322,7 @@ int flb_intput_chunk_get_releasable_space(struct flb_input_chunk *ic,
 }
 */
 
-int flb_input_chunk_find_space_new_data_backlog_aware(
+int flb_input_chunk_release_space_compound(
                         struct flb_input_chunk *new_input_chunk,
                         struct flb_output_instance *output_plugin,
                         size_t *local_release_requirement)
@@ -404,6 +407,26 @@ int flb_input_chunk_find_space_new_data_backlog_aware(
 
         required_space_remainder -= segregated_backlog_releasable_space;
     }
+
+#ifdef FLB_INPUT_CHUNK_RELEASE_SPACE_COMPOUND_RELEASE_FROM_CURRENT_PLUGINS_QUEUE
+    /* This is even more experimental than the rest, that's why it stays disabled until
+     * it's properly tested.
+     */
+    if (required_space_remainder > 0 && active_plugin_releasable_space > 0) {
+        result = flb_input_chunk_release_space(new_input_chunk,
+                                               new_input_chunk->in,
+                                               output_plugin,
+                                               active_plugin_releasable_space,
+                                               FLB_INPUT_CHUNK_RELEASE_SCOPE_LOCAL);
+
+        if (result) {
+            printf("FAILED\n");
+            return -5;
+        }
+
+        required_space_remainder -= active_plugin_releasable_space;
+    }
+#endif
 
     if (required_space_remainder < 0) {
         required_space_remainder = 0;
@@ -498,9 +521,39 @@ int flb_input_chunk_find_space_new_data(struct flb_input_chunk *ic,
 
         local_release_requirement = 0;
 
-        result = flb_input_chunk_find_space_new_data_backlog_aware(
-                                                    ic, o_ins,
-                                                    &local_release_requirement);
+        result = flb_input_chunk_release_space_compound(
+                                            ic, o_ins,
+                                            &local_release_requirement);
+
+#ifdef FLB_INPUT_CHUNK_RELEASE_SPACE_COMPOUND_RELEASE_FROM_CURRENT_PLUGINS_QUEUE
+        if (result || local_release_requirement != 0) {
+            /*
+             * The worst scenario is that we cannot find a space by dropping some
+             * old chunks for the incoming chunk. We need to adjust the routes_mask
+             * of the incoming chunk to not flush to that output instance.
+             */
+            flb_error("[input chunk] no enough space in filesystem to buffer "
+                      "chunk %s in plugin %s", flb_input_chunk_get_name(ic), o_ins->name);
+
+            flb_routes_mask_clear_bit(ic->routes_mask, o_ins->id);
+            if (flb_routes_mask_is_empty(ic->routes_mask)) {
+                bytes = flb_input_chunk_get_size(ic);
+                if (bytes != 0) {
+                    /*
+                     * Skip newly created chunk as newly created chunk
+                     * hasn't updated the fs_chunks_size yet.
+                     */
+                    bytes = flb_input_chunk_get_real_size(ic);
+                    o_ins->fs_chunks_size -= bytes;
+                    flb_error("[input chunk] chunk %s has no output route, "
+                              "remove %ld bytes from fs_chunks_size",
+                              flb_input_chunk_get_name(ic), bytes);
+                }
+            }
+
+            continue;
+        }
+#else
 
         if (!result && local_release_requirement == 0) {
             /* If this function returned 0 it means the space requirement was
@@ -589,10 +642,11 @@ int flb_input_chunk_find_space_new_data(struct flb_input_chunk *ic,
 
             count--;
             if (count == 0) {
-                /* we have dropped enough chunks to place the incoming chunks*/
+                /* we have dropped enough chunks to place the incoming chunks */
                 break;
             }
         }
+#endif
     }
 
     if (count != 0) {
