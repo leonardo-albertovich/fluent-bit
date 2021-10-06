@@ -93,8 +93,8 @@ int sb_segregate_chunks(struct flb_config *config);
 int sb_release_output_queue_space(struct flb_output_instance *output_plugin,
                                   size_t                      required_space);
 
-ssize_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
-                                              size_t                      required_space);
+ssize_t sb_get_releasable_output_queue_space(struct flb_output_instance *output_plugin,
+                                             size_t                      required_space);
 
 
 static inline struct flb_sb *sb_get_context(struct flb_config *config)
@@ -374,8 +374,8 @@ int sb_segregate_chunks(struct flb_config *config)
     return 0;
 }
 
-ssize_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
-                                              size_t                      required_space)
+ssize_t sb_get_releasable_output_queue_space(struct flb_output_instance *output_plugin,
+                                             size_t                      required_space)
 {
     ssize_t              releasable_space;
     struct mk_list      *chunk_iterator;

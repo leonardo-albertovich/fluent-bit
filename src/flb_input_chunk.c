@@ -31,8 +31,8 @@
 #include <fluent-bit/stream_processor/flb_sp.h>
 #include <chunkio/chunkio.h>
 
-extern ssize_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
-                                                     size_t                      required_space);
+extern ssize_t sb_get_releasable_output_queue_space(struct flb_output_instance *output_plugin,
+                                                    size_t                      required_space);
 
 extern int sb_release_output_queue_space(struct flb_output_instance *output_plugin,
                                          size_t                      required_space);
@@ -349,7 +349,7 @@ int flb_input_chunk_find_space_new_data_backlog_aware(
     required_space_remainder -= active_backlog_releasable_space;
 
     if (required_space_remainder > 0) {
-        segregated_backlog_releasable_space = sb_get_releaseable_output_queue_space(
+        segregated_backlog_releasable_space = sb_get_releasable_output_queue_space(
                                                             output_plugin,
                                                             required_space_remainder);
 
