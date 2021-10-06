@@ -31,11 +31,11 @@
 #include <fluent-bit/stream_processor/flb_sp.h>
 #include <chunkio/chunkio.h>
 
-extern size_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin_instance,
+extern size_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
                                                     size_t                      required_space);
 
-extern int sb_release_output_queue_space(struct flb_input_chunk     *new_input_chunk_instance,
-                                         struct flb_output_instance *output_plugin_instance,
+extern int sb_release_output_queue_space(struct flb_input_chunk     *new_input_chunk,
+                                         struct flb_output_instance *output_plugin,
                                          size_t                      minimum_actionable_release);
 
 static void generate_chunk_name(struct flb_input_instance *in,

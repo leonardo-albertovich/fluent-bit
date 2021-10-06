@@ -69,6 +69,9 @@ int flb_input_chunk_write(void *data, const char *buf, size_t len);
 int flb_input_chunk_write_at(void *data, off_t offset,
                              const char *buf, size_t len);
 int flb_input_chunk_is_task_safe_delete(struct flb_task *task);
+int flb_input_chunk_safe_delete(struct flb_input_chunk *ic,
+                                struct flb_input_chunk *old_ic,
+                                uint64_t o_id);
 int flb_input_chunk_append_obj(struct flb_input_instance *in,
                                const char *tag, int tag_len,
                                msgpack_object data);
