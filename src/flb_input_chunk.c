@@ -185,6 +185,54 @@ int flb_intput_chunk_get_releasable_space(struct flb_input_chunk *ic,
     return releasable_space;
 }
 
+int flb_input_chunk_find_space_new_data_backlog(struct flb_input_chunk *ic,
+                                    struct flb_output_instance *o_ins,
+                                    size_t *local_release_requirement)
+{
+    size_t backlog_releasable_space;
+    size_t local_releasable_space;
+    size_t required_local_space;
+    size_t real_required_space;
+    int    result;
+
+    real_required_space = flb_input_chunk_get_real_size(ic);
+
+    *local_release_requirement = real_required_space;
+
+    required_local_space = 0;
+    local_releasable_space = 0;
+    backlog_releasable_space = sb_get_releaseable_output_queue_space(o_ins,
+                                                                     real_required_space);
+
+    if (backlog_releasable_space < real_required_space) {
+        required_local_space = real_required_space - backlog_releasable_space;
+
+        local_releasable_space = flb_intput_chunk_get_releasable_space(ic,
+                                                                       o_ins,
+                                                                       required_local_space);
+
+        if (local_releasable_space >= required_local_space) {
+            if (backlog_releasable_space > 0) {
+                result = sb_release_output_queue_space(ic, o_ins, backlog_releasable_space);
+
+                if (!result) {
+                    *local_release_requirement = required_local_space;
+                }
+            }
+        }
+    }
+    else {
+        result = sb_release_output_queue_space(ic, o_ins, real_required_space);
+
+        if (!result) {
+            *local_release_requirement = 0;;
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
 /*
  * Returns how many chunks needs to be dropped in order to get enough space to
  * buffer the incoming data (with size chunk_size)
@@ -267,61 +315,22 @@ int flb_input_chunk_find_space_new_data(struct flb_input_chunk *ic,
             continue;
         }
 
+        local_release_requirement = 0;
 
-        local_release_requirement = chunk_size;
+        result = flb_input_chunk_find_space_new_data_backlog(ic, o_ins,
+                                                    &local_release_requirement);
 
-        {
-            size_t backlog_releasable_space;
-            size_t local_releasable_space;
-            size_t required_local_space;
-            size_t real_required_space;
-
-            real_required_space = flb_input_chunk_get_real_size(ic);
-
-            required_local_space = 0;
-            local_releasable_space = 0;
-            backlog_releasable_space = sb_get_releaseable_output_queue_space(o_ins,
-                                                                             real_required_space);
-
-            // printf("I NEED %zu BUT ACTUALLY IT'S %zu\n", chunk_size, real_required_space);
-            // printf("I CAN RELEASE %zu FROM BACKLOG\n", backlog_releasable_space);
-
-            if (backlog_releasable_space < real_required_space) {
-                // printf("BUT IT'S NOT ENOUGH\n");
-                required_local_space = real_required_space - backlog_releasable_space;
-
-                local_releasable_space = flb_intput_chunk_get_releasable_space(ic,
-                                                                               o_ins,
-                                                                               required_local_space);
-
-                // printf("I CAN RELEASE %zu FROM LOCAL STORAGE\n", local_releasable_space);
-
-                if (local_releasable_space >= required_local_space) {
-                    // printf("AND THAT MAKES IT ENOUGH\n");
-
-                    if (backlog_releasable_space > 0) {
-                        result = sb_release_output_queue_space(ic, o_ins, backlog_releasable_space);
-
-                        if (!result) {
-                            local_release_requirement = required_local_space;
-                        }
-                    }
-                }
-                else {
-                    // printf("BUT IT'S NOT ENOUGH ANYWAY, I NEED %zu MORE\n", (chunk_size - backlog_releasable_space - local_releasable_space));
-                }
-            }
-            else {
-                // printf("I CAN RELEASE THE WHOLE CHNK FROM BACKLOG\n");
-                result = sb_release_output_queue_space(ic, o_ins, real_required_space);
-
-                if (!result) {
-                    continue;
-                }
-
-                // printf("BUT IT FAILED\n");
-            }
+        if (!result) {
+            /* If this function returned 0 it means the space requirement was
+             * satisfied solely by releasing chunks in either storage_backlog
+             * state (segregated or in queue)
+             */
+            continue;
         }
+
+        /* flb_input_chunk_find_space_new_data_backlog may fail to meet the space
+         * requirements but it always sets local_release_requirement to the right amount
+         */
 
         count = flb_intput_chunk_count_dropped_chunks(ic, o_ins, local_release_requirement);
 
@@ -331,9 +340,6 @@ int flb_input_chunk_find_space_new_data(struct flb_input_chunk *ic,
              * old chunks for the incoming chunk. We need to adjust the routes_mask
              * of the incoming chunk to not flush to that output instance.
              */
-            printf("o_ins->fs_backlog_chunks_size = %zu\n", o_ins->fs_backlog_chunks_size);
-            printf("o_ins->fs_chunks_size = %zu\n",         o_ins->fs_chunks_size);
-
             flb_error("[input chunk] no enough space in filesystem to buffer "
                       "chunk %s in plugin %s", flb_input_chunk_get_name(ic), o_ins->name);
 
@@ -398,11 +404,6 @@ int flb_input_chunk_find_space_new_data(struct flb_input_chunk *ic,
                     flb_input_chunk_destroy(old_ic, FLB_TRUE);
                 }
             }
-
-            printf("AFTER 2 - %s is using %zu and needs %zu\n",
-                   o_ins->name,
-                   (o_ins->fs_chunks_size + o_ins->fs_backlog_chunks_size),
-                   chunk_size);
 
             count--;
             if (count == 0) {
