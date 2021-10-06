@@ -69,35 +69,8 @@ static int  sb_allocate_backlogs(struct flb_sb *ctx);
 static void sb_destroy_backlogs(struct flb_sb *ctx);
 
 static struct sb_out_queue *sb_find_segregated_backlog_by_output_plugin_instance(
-                                struct flb_output_instance *output_plugin_instance,
+                                struct flb_output_instance *output_plugin,
                                 struct flb_sb              *context);
-
-size_t sb_get_releaseable_used_space_by_output_plugin_instance(
-                                struct flb_output_instance *output_plugin_instance,
-                                size_t                      required_space);
-
-static int sb_release_used_space_by_output_plugin_instance(
-                            struct flb_input_chunk     *new_input_chunk,
-                            struct flb_output_instance *output_plugin,
-                            size_t                      minimum_actionable_release);
-
-size_t sb_get_releaseable_segregated_backlog_space_by_output_plugin_instance(
-                                        struct flb_output_instance *output_plugin,
-                                        size_t                      required_space);
-
-static int sb_release_segregated_backlog_space_by_output_plugin_instance(
-                            struct flb_input_chunk     *new_input_chunk,
-                            struct flb_output_instance *output_plugin,
-                            size_t                      minimum_actionable_release);
-
-int sb_release_output_queue_space(
-                            struct flb_input_chunk     *new_input_chunk_instance,
-                            struct flb_output_instance *output_plugin_instance,
-                            size_t                      minimum_actionable_release);
-
-size_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
-                                             size_t                      required_space);
-
 
 static void sb_remove_chunk_from_segregated_backlog(struct cio_chunk    *target_chunk,
                                                     struct sb_out_queue *backlog,
@@ -116,6 +89,12 @@ static int sb_append_chunk_to_segregated_backlogs(struct cio_chunk  *target_chun
                                                   struct flb_sb     *context);
 
 int sb_segregate_chunks(struct flb_config *config);
+
+int sb_release_output_queue_space(struct flb_output_instance *output_plugin,
+                                  size_t                      required_space);
+
+ssize_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
+                                              size_t                      required_space);
 
 
 static inline struct flb_sb *sb_get_context(struct flb_config *config)
@@ -342,354 +321,8 @@ static int sb_append_chunk_to_segregated_backlogs(struct cio_chunk  *target_chun
     return 0;
 }
 
-size_t sb_get_releaseable_segregated_backlog_space_by_output_plugin_instance(
-                                    struct flb_output_instance *output_plugin,
-                                    size_t                      required_space)
-{
-    size_t               releasable_space;
-    struct mk_list      *chunk_iterator;
-    struct flb_sb       *context;
-    struct sb_out_queue *backlog;
-    struct sb_out_chunk *chunk;
-
-    context = sb_get_context(output_plugin->config);
-
-    if (context == NULL) {
-        return 0;
-    }
-
-    backlog = sb_find_segregated_backlog_by_output_plugin_instance(
-                                output_plugin, context);
-
-    if (backlog == NULL) {
-        return 0;
-    }
-
-    releasable_space = 0;
-
-    mk_list_foreach(chunk_iterator, &backlog->chunks) {
-        chunk = mk_list_entry(chunk_iterator, struct sb_out_chunk, _head);
-
-        releasable_space += chunk->size;
-
-        if (releasable_space >= required_space) {
-            break;
-        }
-    }
-
-    return releasable_space;
-}
-
-static int sb_release_segregated_backlog_space_by_output_plugin_instance(
-                struct flb_input_chunk     *new_input_chunk,
-                struct flb_output_instance *output_plugin,
-                size_t                      minimum_actionable_release)
-{
-    struct mk_list      *chunk_iterator_tmp;
-    size_t               releasable_space;
-    struct mk_list      *chunk_iterator;
-    size_t               released_space;
-    size_t               required_space;
-    size_t               chunk_size;
-    struct flb_sb       *context;
-    struct sb_out_queue *backlog;
-    struct sb_out_chunk *chunk;
-
-    context = sb_get_context(output_plugin->config);
-
-    if (context == NULL) {
-        return -1;
-    }
-
-    backlog = sb_find_segregated_backlog_by_output_plugin_instance(
-                                                        output_plugin, context);
-
-    if (backlog == NULL) {
-        return -2;
-    }
-
-    chunk_size = cio_chunk_get_real_size(new_input_chunk->chunk);
-
-    required_space = chunk_size;
-    releasable_space = 0;
-
-    releasable_space = \
-        sb_get_releaseable_segregated_backlog_space_by_output_plugin_instance(
-                                                                output_plugin,
-                                                                required_space);
-
-    if (releasable_space < required_space) {
-        if (releasable_space < minimum_actionable_release &&
-            minimum_actionable_release > 0) {
-            return -3;
-        }
-        else {
-            required_space = minimum_actionable_release;
-        }
-    }
-
-    released_space = 0;
-
-    mk_list_foreach_safe(chunk_iterator, chunk_iterator_tmp, &backlog->chunks) {
-        chunk = mk_list_entry(chunk_iterator, struct sb_out_chunk, _head);
-
-        released_space += chunk->size;
-
-        cio_chunk_close(chunk->chunk, FLB_TRUE);
-        sb_remove_chunk_from_segregated_backlogs(chunk->chunk, context);
-
-        if (released_space >= required_space) {
-            break;
-        }
-    }
-
-    if (released_space < required_space) {
-        return -4;
-    }
-
-    return 0;
-}
-
-size_t sb_get_releaseable_used_space_by_output_plugin_instance(
-                                    struct flb_output_instance *output_plugin,
-                                    size_t                      required_space)
-{
-    struct mk_list         *input_chunk_iterator;
-    size_t                  releasable_space;
-    int                     chunk_was_up;
-    struct flb_input_chunk *input_chunk;
-    struct flb_sb          *context;
-
-    context = sb_get_context(output_plugin->config);
-
-    if (context == NULL) {
-        flb_debug("[storage backlog] storage backlog context is not initialized");
-
-        return 0;
-    }
-
-    releasable_space = 0;
-
-    mk_list_foreach(input_chunk_iterator, &context->ins->chunks) {
-        input_chunk = mk_list_entry(input_chunk_iterator, struct flb_input_chunk, _head);
-
-        chunk_was_up = cio_chunk_is_up(input_chunk->chunk);
-
-        if (!chunk_was_up) {
-            cio_chunk_up_force(input_chunk->chunk);
-        }
-
-        if (!cio_chunk_is_up(input_chunk->chunk)) {
-            flb_debug("[storage backlog] could not force chunk %s to come up",
-                      flb_input_chunk_get_name(input_chunk));
-
-            return 0;
-        }
-
-        if (!flb_routes_mask_get_bit(input_chunk->routes_mask, output_plugin->id)) {
-            if (!chunk_was_up) {
-                cio_chunk_down(input_chunk->chunk);
-            }
-
-            continue;
-        }
-
-        if (flb_input_chunk_is_task_safe_delete(input_chunk->task) == FLB_FALSE) {
-
-            if (!chunk_was_up) {
-                cio_chunk_down(input_chunk->chunk);
-            }
-
-            continue;
-        }
-
-        releasable_space += cio_chunk_get_real_size(input_chunk->chunk);
-
-        if (!chunk_was_up) {
-            cio_chunk_down(input_chunk->chunk);
-        }
-
-        if (releasable_space >= required_space) {
-            break;
-        }
-    }
-
-    return releasable_space;
-}
-
-static int sb_release_used_space_by_output_plugin_instance(
-                struct flb_input_chunk     *new_input_chunk,
-                struct flb_output_instance *output_plugin,
-                size_t                      minimum_actionable_release)
-{
-    struct mk_list            *input_chunk_iterator_tmp;
-    struct mk_list            *input_chunk_iterator;
-    size_t                     releasable_space;
-    size_t                     released_space;
-    size_t                     required_space;
-    int                        chunk_released;
-    int                        chunk_was_up;
-    struct flb_input_chunk    *input_chunk;
-    size_t                     chunk_size;
-    struct flb_sb             *context;
-
-    context = sb_get_context(output_plugin->config);
-
-    if (context == NULL) {
-        return -1;
-    }
-
-    required_space = cio_chunk_get_real_size(new_input_chunk->chunk);
-    releasable_space = 0;
-
-    releasable_space = sb_get_releaseable_used_space_by_output_plugin_instance(
-                                                                output_plugin,
-                                                                required_space);
-
-    if (releasable_space < required_space) {
-        if (releasable_space < minimum_actionable_release &&
-            minimum_actionable_release > 0) {
-            return -1;
-        }
-        else {
-            required_space = minimum_actionable_release;
-        }
-    }
-
-    released_space = 0;
-
-    mk_list_foreach_safe(input_chunk_iterator, input_chunk_iterator_tmp,
-                         &context->ins->chunks) {
-        input_chunk = mk_list_entry(input_chunk_iterator,
-                                             struct flb_input_chunk, _head);
-
-        chunk_was_up = cio_chunk_is_up(input_chunk->chunk);
-
-        if (!chunk_was_up) {
-            cio_chunk_up_force(input_chunk->chunk);
-        }
-
-        if (!cio_chunk_is_up(input_chunk->chunk)) {
-            flb_debug("[storage backlog] could not force chunk %s to come up while "
-                      "releasing chunks", flb_input_chunk_get_name(input_chunk));
-
-            return -2;
-        }
-
-        if (!flb_routes_mask_get_bit(input_chunk->routes_mask,
-                                     output_plugin->id)) {
-            if (!chunk_was_up) {
-                cio_chunk_down(input_chunk->chunk);
-            }
-
-            continue;
-        }
-
-        if (flb_input_chunk_safe_delete(new_input_chunk,
-                                        input_chunk,
-                                        output_plugin->id) == FLB_FALSE ||
-            flb_input_chunk_is_task_safe_delete(input_chunk->task) == FLB_FALSE) {
-            if (!chunk_was_up) {
-                cio_chunk_down(input_chunk->chunk);
-            }
-
-            continue;
-        }
-
-        chunk_size = cio_chunk_get_real_size(input_chunk->chunk);
-        chunk_released = FLB_FALSE;
-
-        if (input_chunk->task != NULL) {
-            /*
-             * If the chunk is referenced by a task and task has no active route,
-             * we need to destroy the task as well.
-             */
-            if (input_chunk->task->users == 0) {
-                flb_debug("[task] drop task_id %d with no active route from input plugin %s",
-                          input_chunk->task->id, new_input_chunk->in->name);
-                flb_task_destroy(input_chunk->task, FLB_TRUE);
-
-                chunk_released = FLB_TRUE;
-            }
-        }
-        else {
-            flb_debug("[input chunk] drop chunk %s with no output route from input plugin %s",
-                      flb_input_chunk_get_name(input_chunk), new_input_chunk->in->name);
-
-            flb_input_chunk_destroy(input_chunk, FLB_TRUE);
-
-            chunk_released = FLB_TRUE;
-        }
-
-        if (chunk_released) {
-            released_space += chunk_size;
-        }
-
-        if (released_space >= required_space) {
-            break;
-        }
-    }
-
-    if (released_space < required_space) {
-        return -2;
-    }
-
-    return 0;
-}
-
-
-size_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
-                                             size_t                      required_space)
-{
-    struct flb_sb *context;
-    size_t         result;
-
-    context = sb_get_context(output_plugin->config);
-
-    if (context == NULL) {
-        return 0;
-    }
-
-    result  = sb_get_releaseable_used_space_by_output_plugin_instance(output_plugin,
-                                                                      required_space);
-
-    result += sb_get_releaseable_segregated_backlog_space_by_output_plugin_instance(
-                                                                output_plugin,
-                                                                required_space);
-
-    return result;
-}
-
-int sb_release_output_queue_space(struct flb_input_chunk     *new_input_chunk,
-                                  struct flb_output_instance *output_plugin,
-                                  size_t                      minimum_actionable_release)
-{
-    struct flb_sb *context;
-    int            result;
-
-    context = sb_get_context(output_plugin->config);
-
-    if (context == NULL) {
-        return -1;
-    }
-
-    result = sb_release_used_space_by_output_plugin_instance(new_input_chunk,
-                                                             output_plugin,
-                                                             minimum_actionable_release);
-
-    if (result) {
-        result = sb_release_segregated_backlog_space_by_output_plugin_instance(
-                                                        new_input_chunk,
-                                                        output_plugin,
-                                                        minimum_actionable_release);
-    }
-
-    return result;
-}
-
 int sb_segregate_chunks(struct flb_config *config)
 {
-
     struct mk_list    *stream_iterator;
     struct mk_list    *chunk_iterator;
     struct flb_sb     *context;
@@ -736,6 +369,90 @@ int sb_segregate_chunks(struct flb_config *config)
             cio_chunk_lock(chunk);
             cio_chunk_down(chunk);
         }
+    }
+
+    return 0;
+}
+
+ssize_t sb_get_releaseable_output_queue_space(struct flb_output_instance *output_plugin,
+                                              size_t                      required_space)
+{
+    ssize_t              releasable_space;
+    struct mk_list      *chunk_iterator;
+    struct flb_sb       *context;
+    struct sb_out_queue *backlog;
+    struct sb_out_chunk *chunk;
+
+    context = sb_get_context(output_plugin->config);
+
+    if (context == NULL) {
+        return 0;
+    }
+
+    backlog = sb_find_segregated_backlog_by_output_plugin_instance(
+                                output_plugin, context);
+
+    if (backlog == NULL) {
+        return 0;
+    }
+
+    releasable_space = 0;
+
+    mk_list_foreach(chunk_iterator, &backlog->chunks) {
+        chunk = mk_list_entry(chunk_iterator, struct sb_out_chunk, _head);
+
+        releasable_space += chunk->size;
+
+        if (releasable_space >= required_space) {
+            break;
+        }
+    }
+
+    return releasable_space;
+}
+
+int sb_release_output_queue_space(struct flb_output_instance *output_plugin,
+                                  size_t                      required_space)
+{
+    struct mk_list      *chunk_iterator_tmp;
+    size_t               releasable_space;
+    struct mk_list      *chunk_iterator;
+    size_t               released_space;
+    size_t               chunk_size;
+    struct flb_sb       *context;
+    struct sb_out_queue *backlog;
+    struct sb_out_chunk *chunk;
+
+    context = sb_get_context(output_plugin->config);
+
+    if (context == NULL) {
+        return -1;
+    }
+
+    backlog = sb_find_segregated_backlog_by_output_plugin_instance(
+                                                        output_plugin, context);
+
+    if (backlog == NULL) {
+        return -2;
+    }
+
+    released_space = 0;
+
+    mk_list_foreach_safe(chunk_iterator, chunk_iterator_tmp, &backlog->chunks) {
+        chunk = mk_list_entry(chunk_iterator, struct sb_out_chunk, _head);
+
+        released_space += chunk->size;
+
+        cio_chunk_close(chunk->chunk, FLB_TRUE);
+        sb_remove_chunk_from_segregated_backlogs(chunk->chunk, context);
+
+        if (released_space >= required_space) {
+            break;
+        }
+    }
+
+    if (released_space < required_space) {
+        return -3;
     }
 
     return 0;
