@@ -1101,7 +1101,7 @@ static int flb_net_verify_route(int family, const struct sockaddr *addr,
         return -3;
     }
 
-    close(fd);
+    flb_socket_close(fd);
 
     return 0;
 }
