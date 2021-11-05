@@ -1051,6 +1051,61 @@ static void set_ip_family(const char *host, struct addrinfo *hints)
     }
 }
 
+static int flb_net_address_to_text(int family, const struct sockaddr *addr,
+                                   socklen_t addrlen, char *output_buffer,
+                                   size_t output_buffer_size)
+{
+    struct sockaddr *proper_addr;
+    const char      *result;
+
+    if (family == AF_INET) {
+        proper_addr = (struct sockaddr *) &((struct sockaddr_in *) addr)->sin_addr;
+    }
+    else if (family == AF_INET6) {
+        proper_addr = (struct sockaddr *) &((struct sockaddr_in6 *) addr)->sin6_addr;
+    }
+    else {
+        return -1;
+    }
+
+    result = inet_ntop(family, proper_addr, output_buffer, output_buffer_size);
+
+    if (result == NULL) {
+        return -2;
+    }
+
+    return 0;
+}
+
+static int flb_net_verify_route(int family, const struct sockaddr *addr,
+                                socklen_t addrlen, char *source_addr)
+{
+    int result;
+    int fd;
+
+    fd = socket(family, SOCK_DGRAM, 0);
+    if (fd == -1) {
+        return -1;
+    }
+
+    if (source_addr != NULL) {
+        result = flb_net_bind_address(fd, source_addr);
+
+        if (result == -1) {
+            return -2;
+        }
+    }
+
+    result = connect(fd, addr, addrlen);
+    if (result != 0) {
+        return -3;
+    }
+
+    close(fd);
+
+    return 0;
+}
+
 /* Connect to a TCP socket server and returns the file descriptor */
 flb_sockfd_t flb_net_tcp_connect(const char *host, unsigned long port,
                                  char *source_addr, int connect_timeout,
@@ -1061,6 +1116,7 @@ flb_sockfd_t flb_net_tcp_connect(const char *host, unsigned long port,
     int ret;
     flb_sockfd_t fd = -1;
     char _port[6];
+    char textual_address[41];
     struct addrinfo hints;
     struct addrinfo *res, *rp;
 
@@ -1119,8 +1175,28 @@ flb_sockfd_t flb_net_tcp_connect(const char *host, unsigned long port,
      * available address.
      */
     for (rp = res; rp != NULL; rp = rp->ai_next) {
+        ret = flb_net_verify_route(rp->ai_family, rp->ai_addr,
+                                   rp->ai_addrlen, source_addr);
+
+        if (ret != 0) {
+            ret = flb_net_address_to_text(res->ai_family, rp->ai_addr,
+                                          rp->ai_addrlen, textual_address,
+                                          sizeof(textual_address));
+
+            if (ret != 0) {
+                strncpy(textual_address,
+                        "address translation failure",
+                        sizeof(textual_address));
+            }
+
+            flb_debug("[net] could not find route for address %s",
+                      textual_address);
+
+            continue;
+        }
+
         /* create socket */
-        fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (fd == -1) {
             flb_error("[net] coult not create client socket, retrying");
             continue;
